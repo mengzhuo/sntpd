@@ -1,0 +1,19 @@
+# Sntpd config
+listen_addr: ":12303"
+worker: 0
+minpoll: 4
+maxpoll: 10
+stratum_pool:
+  - time.windows.com
+  - time.apple.com
+  - wwv.nist.gov
+  - time.nist.gov
+  - time-b.nist.gov
+  - time-a.nist.gov
+
+stats:
+    pro_addr: :7370
+    geodb: GeoLite2-Country.mmdb
+
+restrict:
+  - 128.0.0.1/32 10pps
