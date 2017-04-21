@@ -24,19 +24,21 @@ type Service struct {
 	peers   []*Peer
 	drift   float64
 
+	sysPeer    *Peer
 	offset     time.Duration
 	delay      time.Duration
 	dispersion time.Duration
 	jitter     time.Duration
 	referTime  time.Time
-	leap       uint8
-	stratum    uint8
-	poll       int8
-	precision  int8
+	clockReady chan struct{}
 
-	delayDispData [8]byte
 	responseTmpl  []byte
 	stats         *statService
+	delayDispData [8]byte
+	leap          uint8
+	stratum       uint8
+	poll          int8
+	precision     int8
 }
 
 func absTime(d time.Duration) time.Duration {
@@ -75,26 +77,6 @@ func (s *Service) setFromPeer(p *Peer) {
 	log.Printf("reftime=%s", s.referTime)
 	SetUint32(s.responseTmpl, ReferIDPos, p.refid)
 
-	if absof > NTPAccuracy {
-		s.poll = s.cfg.MinPoll
-		return
-	}
-
-	switch absof / (NTPAccuracy / 10) {
-	case 0: // < 12.8ms
-		s.poll += 1
-	case 1:
-	default:
-		s.poll -= 1
-	}
-
-	if s.poll > s.cfg.MaxPoll {
-		s.poll = s.cfg.MaxPoll
-	}
-
-	if s.poll < s.cfg.MinPoll {
-		s.poll = s.cfg.MinPoll
-	}
 }
 
 func NewService(cfgPath string) *Service {
@@ -104,6 +86,7 @@ func NewService(cfgPath string) *Service {
 		referTime:    time.Now(),
 		precision:    systemPrecision(),
 		responseTmpl: make([]byte, 48, 48),
+		clockReady:   make(chan struct{}, 8),
 	}
 }
 
@@ -190,43 +173,22 @@ func (s *Service) ListenAndServe() (err error) {
 			time.Sleep(interval)
 		}
 	}
-	s.sample()
-	s.doPoll()
-	s.poll = s.cfg.MinPoll
-
 	for i := 0; i < s.cfg.Worker; i++ {
 		go s.makeWorker(i)
 	}
-	go s.doSample()
-	var intervalSec time.Duration
-	for {
-		intervalSec = pollToDuration(s.poll)
-		s.stats.pollGauge.Set(intervalSec.Seconds())
-		log.Printf("next poll interval=%s", intervalSec)
-		time.Sleep(intervalSec)
-		s.doPoll()
+	for _, p := range s.peers {
+		go s.peerPoll(p)
 	}
-}
-
-func (s *Service) doSample() {
-
-	var intervalSec time.Duration
-	for {
-		switch {
-		case s.poll < 6:
-			intervalSec = pollToDuration(s.poll)
-		case s.poll < 9:
-			intervalSec = pollToDuration(s.poll) / 2
-		default:
-			intervalSec = pollToDuration(s.poll) / 4
-		}
-		time.Sleep(intervalSec - 5100*time.Millisecond)
-		s.sample()
-	}
+	s.monitorPoll()
+	return
 }
 
 func pollToDuration(poll int8) time.Duration {
 	return time.Duration(math.Pow(2, float64(poll)) * float64(time.Second))
+}
+
+func durationToPoll(t time.Duration) int8 {
+	return int8(math.Log2(float64(t)))
 }
 
 func (s *Service) initClock() {

@@ -40,6 +40,8 @@ we use this Go's time.Duration through out the project for convience.
 const (
 	MaxDispersion = 16 * time.Second
 	MinDispersion = 5 * time.Millisecond
+	HighMark      = -time.Hour
+	LowMark       = time.Hour
 
 	MaxDistance = 1500 * time.Millisecond
 	SGate       = 3
@@ -60,9 +62,13 @@ const (
 	NotSync
 )
 
-var (
-	epoch = time.Time{}
+const (
+	TypeLower = -1 + iota
+	TypeMid
+	TypeUpper
+)
 
+var (
 	PeerNotAvailable       = errors.New("peer not available")
 	PeerNotSync            = errors.New("not sync")
 	PeerInvalidStratum     = errors.New("invalid stratum")
@@ -83,18 +89,23 @@ type Peer struct {
 	Addr                string
 	offset, delay, disp time.Duration
 	rootDelay, rootDisp time.Duration
+	rootDistance        time.Duration
 	jitter              float64
+	nextPoll            time.Duration
 	epoch               time.Time
 	Filter              []ClockFilter
 	filterDistance      []filterDistance
 	pollCounter         uint64
 	refid               uint32
+	poll                int8
+	reach               uint8
 	leap                uint8
 	stratum             uint8
 }
 
 func (s *Service) queryPeer(p *Peer) (resp *ntp.Response, disp time.Duration, err error) {
 	resp, err = ntp.Query(p.Addr, 4)
+	p.reach <<= 1
 	if err != nil {
 		return
 	}
@@ -109,11 +120,14 @@ func (s *Service) queryPeer(p *Peer) (resp *ntp.Response, disp time.Duration, er
 	if resp.RootDelay/2+resp.RootDispersion > MaxDispersion {
 		return nil, MaxDispersion, PeerRootDistanceTooBig
 	}
+
 	p.rootDisp = resp.RootDispersion
 	p.rootDelay = resp.RootDelay
 	p.leap = resp.Leap
 	p.stratum = resp.Stratum
 	p.refid = resp.ReferenceID
+	p.poll = durationToPoll(resp.Poll)
+	p.reach |= 1
 
 	disp = secondToDuration(log2D(s.precision)) + resp.Precision + secondToDuration(Phi*resp.RTT.Seconds())
 	return
@@ -137,7 +151,7 @@ func (p *Peer) init() {
 			Offset: 0 * time.Second,
 			Delay:  MaxDispersion,
 			Disp:   MaxDispersion,
-			Epoch:  epoch,
+			Epoch:  ntpEpoch,
 		}
 	}
 	p.filterDistance = make([]filterDistance, NStage)
@@ -201,7 +215,7 @@ func (s *Service) clockFilter(p *Peer, offset, delay, disp time.Duration, ct tim
 	}
 
 	// after clock is stablized
-	if s.poll == s.cfg.MaxPoll {
+	if p.poll == s.cfg.MaxPoll {
 		p.pollCounter += 1
 	} else {
 		p.pollCounter = 0
@@ -213,7 +227,7 @@ func (s *Service) clockFilter(p *Peer, offset, delay, disp time.Duration, ct tim
 	// find match filter
 	m := 0
 	for _, fd := range p.filterDistance {
-		if fd.distance >= MaxDispersion || (m > 2 && fd.distance > MaxDistance) {
+		if fd.distance >= MaxDispersion || (m > 2 && fd.distance >= MaxDistance) {
 			continue
 		}
 		m += 1
@@ -269,6 +283,12 @@ func logSample(pl []*Peer) {
 
 }
 
+type Interset struct {
+	peer *Peer
+	val  time.Duration
+	typE int
+}
+
 // https://tools.ietf.org/html/rfc5905#appendix-A.5.5.1
 // The origin clock select algorithm (finding intersection) in RFC 5905 is too complex to
 // implement and understand therefor we use Student's T distribution
@@ -276,53 +296,84 @@ func logSample(pl []*Peer) {
 // to make sure that we had an accure offset to "real" time
 // along with sorted by jitter/disp/rootdistance
 func (s *Service) clockSelect() (surviors []*Peer) {
-	samples := []*Peer{}
+
+	samples := []Interset{}
 	for _, p := range s.peers {
 		if err := s.fit(p); err != nil {
 			log.Printf("clockSelect: %s not fit, reason:%s", p.Addr, err)
 			continue
 		}
-		samples = append(samples, p)
+		prd := rootDist(p)
+		p.rootDistance = prd
+		samples = append(samples, Interset{p, p.offset - prd, TypeLower})
+		samples = append(samples, Interset{p, p.offset + prd, TypeUpper})
 	}
 
 	if len(samples) < 2 {
 		log.Printf("clockSelect: not enough peer to select cluster surviors")
-		logSample(samples)
 		return
 	}
+	return s.marzullo(samples)
+}
 
-	// find surviors by Student's T distribution
-	mean := meanOffset(samples)
+func (s *Service) marzullo(iset []Interset) (surviors []*Peer) {
 
-	stdDev := stdDevOffset(mean, samples)
-	if math.IsNaN(stdDev) {
-		log.Printf("clockSelect: stdDev too big!")
+	sort.Sort(byOffset(iset))
+	nlist := len(iset) / 2
+	nl2 := len(iset)
+
+	var n int
+	low := time.Hour
+	high := -time.Hour
+
+	for allow := 0; 2*allow < nlist; allow++ {
+
+		n = 0
+		for _, set := range iset {
+			low = set.val
+			n -= set.typE
+			if n >= nlist-allow {
+				break
+			}
+		}
+
+		n = 0
+		for j := nl2 - 1; j > 0; j-- {
+			high = iset[j].val
+			n += iset[j].typE
+			if n >= nlist-allow {
+				break
+			}
+		}
+		if high > low {
+			break
+		}
 	}
 
-	df := len(samples) - 1
-	p95Interval := secondToDuration(stdDev / math.Sqrt(float64(df)) * tDistr[df])
-
-	high := mean + p95Interval
-	low := mean - p95Interval
-	log.Printf("clockSelect: mean:%s stdDev:%f p95=%s", mean, stdDev, p95Interval)
-
-	surviors = []*Peer{}
-	for _, p := range samples {
-
-		if p.disp == MaxDispersion {
-			log.Printf("clockSelect: peer %s dispersion max", p.Addr)
+	var p *Peer
+	for i := 0; i < len(iset); i += 2 {
+		p = iset[i].peer
+		if high <= low || p.offset+p.rootDistance < low || p.offset-p.rootDistance > high {
 			continue
 		}
-
-		if low < p.offset && p.offset < high {
-			surviors = append(surviors, p)
-		} else {
-			log.Printf("clockSelect: peer %s not in p95 offset=%s ", p.Addr, p.offset)
-		}
-
+		surviors = append(surviors, p)
 	}
-	sort.Sort(byDelay(surviors))
-	return surviors
+	return
+
+}
+
+type byOffset []Interset
+
+func (b byOffset) Less(i, j int) bool {
+	return b[i].val < b[j].val
+}
+
+func (b byOffset) Len() int {
+	return len(b)
+}
+
+func (b byOffset) Swap(i, j int) {
+	b[i], b[j] = b[j], b[i]
 }
 
 type byDelay []*Peer
@@ -370,36 +421,67 @@ func (s *Service) sample() {
 			s.clockFilter(p, resp.ClockOffset, resp.RTT, disp, time.Now())
 		}(peer)
 	}
-
 	wg.Wait()
-
 }
 
-func (s *Service) doPoll() {
+func (s *Service) peerPoll(p *Peer) {
 
-	surviors := s.clockSelect()
-	if len(surviors) < 1 {
-		log.Print("no one surved")
+	for {
+		time.Sleep(pollToDuration(p.poll))
+		resp, disp, err := s.queryPeer(p)
+		if err == PeerNotAvailable {
+			s.clockFilter(p, 0, 0, MaxDispersion, time.Now())
+		}
+		if err != nil {
+			log.Printf("queryPeer %s: err=%s", p.Addr, err)
+			continue
+		}
+		s.clockFilter(p, resp.ClockOffset, resp.RTT, disp, time.Now())
+		s.clockReady <- struct{}{}
+	}
+}
+
+func (s *Service) monitorPoll() {
+
+	tick := time.NewTicker(time.Second)
+	var status uint8
+	for {
+		select {
+		case <-tick.C:
+			status |= 1
+		case <-s.clockReady:
+			status |= 2
+		}
+
+		if status != 3 {
+			continue
+		}
+		status = 0
+
+		surviors := s.clockSelect()
+		if len(surviors) < 1 {
+			log.Print("no one surved")
+			return
+		}
+
+		p := surviors[0]
+		s.clockCombine(surviors)
+
+		var (
+			jumped bool
+			err    error
+		)
+		s.drift, jumped, err = s.setOffsetToSystem(s.offset, s.leap)
+		if err != nil {
+			log.Print("set system err", err)
+		}
+		s.setFromPeer(p)
+		log.Printf("set system from:%s offset:%s, leap:%v drift:%v, jumped=%v",
+			p.Addr, s.offset, s.leap, s.drift, jumped)
+		log.Printf("set system from:%s root distance:%s, root delay:%s",
+			p.Addr, rootDist(p), p.delay)
 		return
 	}
-
-	p := surviors[0]
-	s.clockCombine(surviors)
-
-	var (
-		jumped bool
-		err    error
-	)
-	s.drift, jumped, err = s.setOffsetToSystem(s.offset, s.leap)
-	if err != nil {
-		log.Print("set system err", err)
-	}
-	s.setFromPeer(p)
-	log.Printf("set system from:%s offset:%s, leap:%v drift:%v, jumped=%v",
-		p.Addr, s.offset, s.leap, s.drift, jumped)
-	log.Printf("set system from:%s root distance:%s, root delay:%s",
-		p.Addr, rootDist(p), p.delay)
-	return
 }
 
 func Diff(a, b time.Duration) float64 {
@@ -470,6 +552,9 @@ func (s *Service) fit(p *Peer) (err error) {
 	}
 	if time.Now().Before(p.epoch) {
 		return PeerRootDistanceTooBig
+	}
+	if p.reach&0x07 == 0 {
+		return PeerNotAvailable
 	}
 	return
 }
