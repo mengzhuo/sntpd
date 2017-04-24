@@ -32,13 +32,14 @@ type Service struct {
 	referTime  time.Time
 	clockReady chan struct{}
 
-	responseTmpl  []byte
-	stats         *statService
-	delayDispData [8]byte
-	leap          uint8
-	stratum       uint8
-	poll          int8
-	precision     int8
+	responseTmpl []byte
+	stats        *statService
+	leap         uint8
+	stratum      uint8
+	poll         int8
+	precision    int8
+
+	pollLevelCounter int8
 }
 
 func absTime(d time.Duration) time.Duration {

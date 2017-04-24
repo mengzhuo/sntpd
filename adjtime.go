@@ -25,15 +25,22 @@ func (s *Service) setOffsetToSystem(offset time.Duration, leap uint8) (driftPPM 
 	offsetNsec := offset.Nanoseconds()
 
 	absOffset := absTime(offset)
-	if absOffset > NTPAccuracy {
+
+	switch {
+
+	case absOffset > NTPAccuracy:
 		s.poll = s.cfg.MinPoll
-	} else {
-		if absOffset < NTPAccuracy/10 && s.poll < s.cfg.MaxPoll {
+		s.pollLevelCounter = 0
+
+	case absOffset < NTPAccuracy/10:
+		s.pollLevelCounter += 1
+		if s.pollLevelCounter >= int8(len(s.peers)) && s.poll < s.cfg.MaxPoll {
 			s.poll += 1
+			s.pollLevelCounter = 0
 		}
-		if absOffset > NTPAccuracy/5 && s.poll > s.cfg.MinPoll {
-			s.poll -= 1
-		}
+	case absOffset > NTPAccuracy/5 && s.poll > s.cfg.MinPoll:
+		s.poll -= 1
+		s.pollLevelCounter = 0
 	}
 
 	if i64abs(offsetNsec) < MAX_ADJUST {

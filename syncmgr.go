@@ -467,7 +467,12 @@ func (s *Service) peerPoll(p *Peer) {
 func (s *Service) monitorPoll() {
 
 	tick := time.NewTicker(1 * time.Second)
-	var status uint8
+	var (
+		status uint8
+		jumped bool
+		err    error
+		p      *Peer
+	)
 	log.Print("start poll from peers")
 	for {
 		select {
@@ -488,13 +493,17 @@ func (s *Service) monitorPoll() {
 			continue
 		}
 
-		p := surviors[0]
+		p = surviors[0]
+		if s.sysPeer != nil {
+			for _, p := range surviors {
+				if p.Addr == s.sysPeer.Addr {
+					p = s.sysPeer
+					break
+				}
+			}
+		}
 		s.clockCombine(surviors)
 
-		var (
-			jumped bool
-			err    error
-		)
 		s.drift, jumped, err = s.setOffsetToSystem(s.offset, s.leap)
 		if err != nil {
 			log.Print("set system err", err)
