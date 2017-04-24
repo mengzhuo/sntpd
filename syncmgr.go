@@ -158,6 +158,7 @@ func (p *Peer) init() {
 	p.disp = MaxDispersion
 	p.delay = MaxDispersion
 	p.epoch = time.Now().Truncate(10 * time.Second)
+	p.poll = 4
 }
 
 type filterDistance struct {
@@ -443,7 +444,7 @@ func (s *Service) peerPoll(p *Peer) {
 
 func (s *Service) monitorPoll() {
 
-	tick := time.NewTicker(time.Second)
+	tick := time.NewTicker(4 * time.Second)
 	var status uint8
 	for {
 		select {
