@@ -157,7 +157,6 @@ func (s *Service) ListenAndServe() (err error) {
 	}
 	s.initClock()
 	s.stats = newStatService(s.cfg)
-
 	go func() {
 		time.Sleep(time.Hour)
 		log.Printf("write drift:%f", s.drift)

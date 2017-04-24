@@ -24,6 +24,18 @@ func (s *Service) setOffsetToSystem(offset time.Duration, leap uint8) (driftPPM 
 	tmx := &syscall.Timex{}
 	offsetNsec := offset.Nanoseconds()
 
+	absOffset := absTime(offset)
+	if absOffset > NTPAccuracy {
+		s.poll = s.cfg.MinPoll
+	} else {
+		if absOffset < NTPAccuracy/10 && s.poll < s.cfg.MaxPoll {
+			s.poll += 1
+		}
+		if absOffset > NTPAccuracy/5 && s.poll > s.cfg.MinPoll {
+			s.poll -= 1
+		}
+	}
+
 	if i64abs(offsetNsec) < MAX_ADJUST {
 		tmx.Modes = ADJ_STATUS | ADJ_NANO | ADJ_OFFSET | ADJ_TIMECONST | ADJ_MAXERROR | ADJ_ESTERROR
 		tmx.Status = STA_PLL

@@ -126,7 +126,7 @@ func (s *Service) queryPeer(p *Peer) (resp *ntp.Response, disp time.Duration, er
 	p.leap = resp.Leap
 	p.stratum = resp.Stratum
 	p.refid = resp.ReferenceID
-	p.poll = durationToPoll(resp.Poll)
+	s.updatePoll(p, durationToPoll(resp.Poll))
 	p.reach |= 1
 
 	disp = secondToDuration(log2D(s.precision)) + resp.Precision + secondToDuration(Phi*resp.RTT.Seconds())
@@ -425,9 +425,30 @@ func (s *Service) sample() {
 	wg.Wait()
 }
 
+func (s *Service) updatePoll(p *Peer, poll int8) {
+
+	if p.poll < s.cfg.MinPoll {
+		p.poll = s.cfg.MinPoll
+	}
+	if p.poll > s.cfg.MaxPoll {
+		p.poll = s.cfg.MaxPoll
+	}
+
+	// s.poll for stablity
+	if p.poll > s.poll {
+		p.poll = s.poll
+	}
+
+	if p.poll < s.poll {
+		p.poll = s.poll
+	}
+}
+
 func (s *Service) peerPoll(p *Peer) {
 
 	for {
+
+		log.Printf("peer:%s sleep for %d", p.Addr, p.poll)
 		time.Sleep(pollToDuration(p.poll))
 		resp, disp, err := s.queryPeer(p)
 		if err == PeerNotAvailable {
@@ -437,6 +458,7 @@ func (s *Service) peerPoll(p *Peer) {
 			log.Printf("queryPeer %s: err=%s", p.Addr, err)
 			continue
 		}
+
 		s.clockFilter(p, resp.ClockOffset, resp.RTT, disp, time.Now())
 		s.clockReady <- struct{}{}
 	}
@@ -444,8 +466,9 @@ func (s *Service) peerPoll(p *Peer) {
 
 func (s *Service) monitorPoll() {
 
-	tick := time.NewTicker(4 * time.Second)
+	tick := time.NewTicker(1 * time.Second)
 	var status uint8
+	log.Print("start poll from peers")
 	for {
 		select {
 		case <-tick.C:
@@ -462,7 +485,7 @@ func (s *Service) monitorPoll() {
 		surviors := s.clockSelect()
 		if len(surviors) < 1 {
 			log.Print("no one surved")
-			return
+			continue
 		}
 
 		p := surviors[0]
@@ -481,7 +504,7 @@ func (s *Service) monitorPoll() {
 			p.Addr, s.offset, s.leap, s.drift, jumped)
 		log.Printf("set system from:%s root distance:%s, root delay:%s",
 			p.Addr, rootDist(p), p.delay)
-		return
+
 	}
 }
 
