@@ -40,8 +40,6 @@ we use this Go's time.Duration through out the project for convience.
 const (
 	MaxDispersion = 16 * time.Second
 	MinDispersion = 5 * time.Millisecond
-	HighMark      = -time.Hour
-	LowMark       = time.Hour
 
 	MaxDistance = 1500 * time.Millisecond
 	SGate       = 3
@@ -427,20 +425,20 @@ func (s *Service) sample() {
 
 func (s *Service) updatePoll(p *Peer, poll int8) {
 
+	p.poll = poll
+
 	if p.poll < s.cfg.MinPoll {
 		p.poll = s.cfg.MinPoll
 	}
-	if p.poll > s.cfg.MaxPoll {
-		p.poll = s.cfg.MaxPoll
-	}
 
-	// s.poll for stablity
+	// we can't undersample
 	if p.poll > s.poll {
 		p.poll = s.poll
 	}
 
-	if p.poll < s.poll {
-		p.poll = s.poll
+	// don't get too far
+	if s.poll-p.poll > 2 {
+		p.poll = s.poll - 2
 	}
 }
 
@@ -466,26 +464,23 @@ func (s *Service) peerPoll(p *Peer) {
 
 func (s *Service) monitorPoll() {
 
-	tick := time.NewTicker(1 * time.Second)
 	var (
-		status uint8
-		jumped bool
-		err    error
-		p      *Peer
+		jumped     bool
+		err        error
+		p          *Peer
+		readyClock int
 	)
 	log.Print("start poll from peers")
-	for {
-		select {
-		case <-tick.C:
-			status |= 1
-		case <-s.clockReady:
-			status |= 2
-		}
 
-		if status != 3 {
+	for {
+		<-s.clockReady
+		readyClock += 1
+
+		if readyClock < len(s.cfg.StratumPool) {
 			continue
 		}
-		status = 0
+
+		readyClock = 0
 
 		surviors := s.clockSelect()
 		if len(surviors) < 1 {
