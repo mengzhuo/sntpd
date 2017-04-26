@@ -89,7 +89,6 @@ type Peer struct {
 	rootDelay, rootDisp time.Duration
 	rootDistance        time.Duration
 	jitter              float64
-	nextPoll            time.Duration
 	epoch               time.Time
 	Filter              []ClockFilter
 	filterDistance      []filterDistance
@@ -124,6 +123,7 @@ func (s *Service) queryPeer(p *Peer) (resp *ntp.Response, disp time.Duration, er
 	p.leap = resp.Leap
 	p.stratum = resp.Stratum
 	p.refid = resp.ReferenceID
+	p.rootDistance = rootDistance(p)
 	s.updatePoll(p, durationToPoll(resp.Poll))
 	p.reach |= 1
 
@@ -302,8 +302,6 @@ func (s *Service) clockSelect() (surviors []*Peer) {
 			log.Printf("clockSelect: %s not fit, reason:%s", p.Addr, err)
 			continue
 		}
-		prd := rootDist(p)
-		p.rootDistance = prd
 		samples = append(samples, Interset{p, p.offset - prd, TypeLower})
 		samples = append(samples, Interset{p, p.offset + prd, TypeUpper})
 	}
@@ -389,22 +387,6 @@ func (b byDelay) Swap(i, j int) {
 	b[i], b[j] = b[j], b[i]
 }
 
-func meanOffset(pl []*Peer) (t time.Duration) {
-	for _, p := range pl {
-		t += p.offset
-	}
-	return t / time.Duration(len(pl))
-}
-
-func stdDevOffset(mean time.Duration, pl []*Peer) (dev float64) {
-
-	for _, p := range pl {
-		sub := (p.offset - mean)
-		dev += math.Pow(sub.Seconds(), 2)
-	}
-	return math.Sqrt(dev / float64(len(pl)))
-}
-
 func (s *Service) sample() {
 
 	var wg sync.WaitGroup
@@ -427,18 +409,17 @@ func (s *Service) updatePoll(p *Peer, poll int8) {
 
 	p.poll = poll
 
-	if p.poll < s.cfg.MinPoll {
-		p.poll = s.cfg.MinPoll
-	}
-
 	// we can't undersample
 	if p.poll > s.poll {
 		p.poll = s.poll
 	}
-
 	// don't get too far
 	if s.poll-p.poll > 2 {
 		p.poll = s.poll - 2
+	}
+
+	if p.poll < s.cfg.MinPoll {
+		p.poll = s.cfg.MinPoll
 	}
 }
 
@@ -507,7 +488,7 @@ func (s *Service) monitorPoll() {
 		log.Printf("set system from:%s offset:%s, leap:%v drift:%v, jumped=%v",
 			p.Addr, s.offset, s.leap, s.drift, jumped)
 		log.Printf("set system from:%s root distance:%s, root delay:%s",
-			p.Addr, rootDist(p), p.delay)
+			p.Addr, p.rootDistance, p.delay)
 
 	}
 }
@@ -522,7 +503,7 @@ func (s *Service) clockCombine(surviors []*Peer) {
 	var leapCount [3]uint8
 
 	for _, p := range surviors {
-		x = 1 / rootDist(p).Seconds()
+		x = 1 / p.rootDistance.Seconds()
 		y += x
 		z += x * p.offset.Seconds()
 		w += x * Diff(p.offset, s.offset)
@@ -545,14 +526,15 @@ func getLeap(cnt [3]uint8) uint8 {
 	return maxI
 }
 
-func rootDist(p *Peer) time.Duration {
+func rootDistance(p *Peer) (rd time.Duration) {
 	ct := time.Now()
+	rd = (p.rootDisp +
+		p.disp +
+		secondToDuration(Phi*ct.Sub(p.epoch).Seconds()) +
+		secondToDuration(p.jitter))
+
 	return maxDuration(MinDispersion,
-		(p.rootDelay+p.delay)/2+
-			p.rootDisp+
-			p.disp+
-			secondToDuration(Phi*ct.Sub(p.epoch).Seconds())+
-			secondToDuration(p.jitter))
+		p.rootDelay+p.delay+rd/2)
 }
 
 func maxDuration(a, b time.Duration) time.Duration {
@@ -575,7 +557,7 @@ func (s *Service) fit(p *Peer) (err error) {
 		return PeerInvalidStratum
 	}
 
-	if rootDist(p) > MaxDistance+secondToDuration(Phi*log2D(s.poll)) {
+	if p.rootDistance > MaxDistance+secondToDuration(Phi*log2D(s.poll)) {
 		return PeerRootDistanceTooBig
 	}
 	if time.Now().Before(p.epoch) {

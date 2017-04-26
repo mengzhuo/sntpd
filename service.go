@@ -57,7 +57,7 @@ func (s *Service) setFromPeer(p *Peer) {
 	s.stratum = p.stratum + 1
 	SetUint8(s.responseTmpl, Stratum, s.stratum)
 
-	SetInt8(s.responseTmpl, Poll, s.poll)
+	SetInt8(s.responseTmpl, Poll, p.poll)
 	SetInt8(s.responseTmpl, ClockPrecision, s.precision)
 
 	s.delay = p.rootDelay + p.delay
