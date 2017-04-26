@@ -302,8 +302,8 @@ func (s *Service) clockSelect() (surviors []*Peer) {
 			log.Printf("clockSelect: %s not fit, reason:%s", p.Addr, err)
 			continue
 		}
-		samples = append(samples, Interset{p, p.offset - prd, TypeLower})
-		samples = append(samples, Interset{p, p.offset + prd, TypeUpper})
+		samples = append(samples, Interset{p, p.offset - p.rootDistance, TypeLower})
+		samples = append(samples, Interset{p, p.offset + p.rootDistance, TypeUpper})
 	}
 
 	if len(samples) < 2 {

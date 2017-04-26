@@ -13,6 +13,7 @@ import (
 type statService struct {
 	//stats
 	reqCounter  *prometheus.CounterVec
+	fastCounter prometheus.Counter
 	offsetGauge prometheus.Gauge
 	dispGauge   prometheus.Gauge
 	delayGauge  prometheus.Gauge
@@ -37,6 +38,13 @@ func newStatService(cfg *Config) (s *statService) {
 		Help:      "The total number of ntp request",
 	}, []string{"cc"})
 	prometheus.MustRegister(reqCounter)
+	fastCounter := prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "ntp",
+		Subsystem: "requests",
+		Name:      "fasttotal",
+		Help:      "The total number of ntp request",
+	})
+	prometheus.MustRegister(fastCounter)
 
 	offsetGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "ntp",
@@ -92,6 +100,7 @@ func newStatService(cfg *Config) (s *statService) {
 
 	s = &statService{
 		reqCounter:  reqCounter,
+		fastCounter: fastCounter,
 		offsetGauge: offsetGauge,
 		pollGauge:   pollGauge,
 		delayGauge:  delayGauge,
@@ -109,5 +118,6 @@ func statsIP(s *statService, raddr *net.UDPAddr) {
 		log.Print("stat ip err=", err)
 		return
 	}
+	s.fastCounter.Inc()
 	s.reqCounter.WithLabelValues(country.Country.IsoCode).Inc()
 }
