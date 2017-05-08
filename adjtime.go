@@ -24,25 +24,6 @@ func (s *Service) setOffsetToSystem(offset time.Duration, leap uint8) (driftPPM 
 	tmx := &syscall.Timex{}
 	offsetNsec := offset.Nanoseconds()
 
-	absOffset := absTime(offset)
-
-	switch {
-
-	case absOffset > NTPAccuracy:
-		s.poll = s.cfg.MinPoll
-		s.pollLevelCounter = 0
-
-	case absOffset < NTPAccuracy/10:
-		s.pollLevelCounter += 1
-		if s.pollLevelCounter >= int8(len(s.peers)) && s.poll < s.cfg.MaxPoll {
-			s.poll += 1
-			s.pollLevelCounter = 0
-		}
-	case absOffset > NTPAccuracy/5 && s.poll > s.cfg.MinPoll:
-		s.poll -= 1
-		s.pollLevelCounter = 0
-	}
-
 	if i64abs(offsetNsec) < MAX_ADJUST {
 		tmx.Modes = ADJ_STATUS | ADJ_NANO | ADJ_OFFSET | ADJ_TIMECONST | ADJ_MAXERROR | ADJ_ESTERROR
 		tmx.Status = STA_PLL
@@ -83,25 +64,6 @@ func absInt64(a int64) int64 {
 		return -a
 	}
 	return a
-}
-
-func systemClockSyncing() bool {
-	tmx := &syscall.Timex{}
-	r, err := syscall.Adjtimex(tmx)
-	log.Print(r, err, statusToString(tmx.Status))
-	if err != nil {
-		return true
-	}
-	/*
-		if tmx.Status&STA_UNSYNC != 0 {
-			return true
-		}
-	*/
-	if tmx.Offset != 0 {
-		log.Printf("system offset =%s", time.Duration(tmx.Offset))
-		return true
-	}
-	return false
 }
 
 func initClock(freq int64) {

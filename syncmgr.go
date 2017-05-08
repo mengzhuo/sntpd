@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/beevik/ntp"
@@ -41,10 +42,11 @@ const (
 	MaxDispersion = 16 * time.Second
 	MinDispersion = 5 * time.Millisecond
 
-	MaxDistance = 1500 * time.Millisecond
-	SGate       = 3
-	Allan       = 11
-	AllanXpt    = (1 << Allan) * time.Second
+	MaxDistance   = 1500 * time.Millisecond
+	SGate         = 3
+	Allan         = 11
+	AllanXpt      = (1 << Allan) * time.Second
+	ClockMiniStep = 120 * time.Second
 
 	SampleMaxCount       = 32
 	MaxStratum     uint8 = 16
@@ -65,6 +67,15 @@ const (
 	TypeMid
 	TypeUpper
 )
+
+const (
+	ClockNew State = iota
+	ClockSetFreq
+	ClockSpike
+	ClockSync
+)
+
+type State int
 
 var (
 	PeerNotAvailable       = errors.New("peer not available")
@@ -92,7 +103,6 @@ type Peer struct {
 	epoch               time.Time
 	Filter              []ClockFilter
 	filterDistance      []filterDistance
-	pollCounter         uint64
 	refid               uint32
 	poll                int8
 	reach               uint8
@@ -156,6 +166,7 @@ func (p *Peer) init() {
 	p.disp = MaxDispersion
 	p.delay = MaxDispersion
 	p.epoch = time.Now().Truncate(10 * time.Second)
+	p.refid = 1414090313
 	p.poll = 4
 }
 
@@ -213,13 +224,7 @@ func (s *Service) clockFilter(p *Peer, offset, delay, disp time.Duration, ct tim
 		}
 	}
 
-	// after clock is stablized
-	if p.poll == s.cfg.MaxPoll {
-		p.pollCounter += 1
-	} else {
-		p.pollCounter = 0
-	}
-	if p.pollCounter > NStage {
+	if s.freqCount == 0 {
 		sort.Sort(byDistance(p.filterDistance))
 	}
 
@@ -443,32 +448,38 @@ func (s *Service) peerPoll(p *Peer) {
 	}
 }
 
+func (s *Service) setTime(p *Peer, offset time.Duration, leap uint8) {
+	var err error
+	s.drift, _, err = s.setOffsetToSystem(offset, leap)
+	if err != nil {
+		log.Print("set system err", err)
+	}
+	log.Printf("set system from:%s offset:%s, leap:%v drift:%v, jumped=%v",
+		p.Addr, s.offset, s.leap, s.drift)
+	log.Printf("set system from:%s root distance:%s, root delay:%s",
+		p.Addr, p.rootDistance, p.delay)
+
+}
+
 func (s *Service) monitorPoll() {
 
 	var (
-		jumped     bool
-		err        error
-		p          *Peer
-		readyClock int
+		p     *Peer
+		state State
+		leap  uint8
+		count int
+		now   time.Time
+
+		mu, offset, jitter time.Duration
 	)
 	log.Print("start poll from peers")
-
 	for {
 		<-s.clockReady
-		readyClock += 1
-
-		if readyClock < len(s.cfg.StratumPool) {
-			continue
-		}
-
-		readyClock = 0
-
 		surviors := s.clockSelect()
 		if len(surviors) < 1 {
 			log.Print("no one surved")
 			continue
 		}
-
 		p = surviors[0]
 		if s.sysPeer != nil {
 			for _, p := range surviors {
@@ -478,26 +489,79 @@ func (s *Service) monitorPoll() {
 				}
 			}
 		}
-		s.clockCombine(surviors)
 
-		s.drift, jumped, err = s.setOffsetToSystem(s.offset, s.leap)
-		if err != nil {
-			log.Print("set system err", err)
+		leap, offset, jitter = s.clockCombine(surviors)
+		now = time.Now()
+		mu = now.Sub(s.epoch)
+
+		log.Printf("state=%d offset=%s jitter=%s mu=%s", state, offset, jitter, mu)
+
+		if absTime(offset) > 128*time.Millisecond {
+			switch state {
+			case ClockSync:
+				state = ClockSpike
+			case ClockSetFreq:
+				if mu < ClockMiniStep {
+					continue
+				}
+				fallthrough
+			case ClockSpike:
+				if mu < ClockMiniStep {
+					continue
+				}
+				s.poll = s.cfg.MinPoll
+				fallthrough
+			default:
+				s.jitter = jitter
+				s.setTime(p, offset, leap)
+				state = ClockSetFreq
+				s.epoch = now
+				continue
+			}
+		} else {
+			switch state {
+			case ClockNew:
+				s.jitter = jitter
+				s.setTime(p, offset, leap)
+				state = ClockSetFreq
+			case ClockSetFreq:
+				if mu < ClockMiniStep {
+					continue
+				}
+				s.directFreq(offset)
+				fallthrough
+			default:
+				if s.freqCount == 0 && count > 3 {
+					s.poll += 1
+					count = 0
+				}
+				state = ClockSync
+				if fabs(offset.Seconds()) < 500*time.Millisecond.Seconds() {
+					s.freqCount = 0
+					count += 1
+				}
+			}
 		}
+		s.epoch = now
+		s.stats.pollGauge.Set(float64(s.poll))
 		s.setFromPeer(p)
-		log.Printf("set system from:%s offset:%s, leap:%v drift:%v, jumped=%v",
-			p.Addr, s.offset, s.leap, s.drift, jumped)
-		log.Printf("set system from:%s root distance:%s, root delay:%s",
-			p.Addr, p.rootDistance, p.delay)
-
 	}
+}
+
+func (s *Service) directFreq(offset time.Duration) {
+	freq := (offset.Seconds() / time.Now().Sub(s.epoch).Seconds())
+	log.Print("direct freq:%f", freq)
+	ntv := &syscall.Timex{}
+	ntv.Modes = ADJ_FREQUENCY
+	ntv.Freq = int64(freq * 65536e6)
+	syscall.Adjtimex(ntv)
 }
 
 func Diff(a, b time.Duration) float64 {
 	return math.Pow(a.Seconds()-b.Seconds(), 2)
 }
 
-func (s *Service) clockCombine(surviors []*Peer) {
+func (s *Service) clockCombine(surviors []*Peer) (leap uint8, offset, jitter time.Duration) {
 
 	var x, y, z, w float64
 	var leapCount [3]uint8
@@ -510,9 +574,10 @@ func (s *Service) clockCombine(surviors []*Peer) {
 		leapCount[p.leap] += 1 // we will panic if peer is NotSync
 	}
 
-	s.leap = getLeap(leapCount)
-	s.offset = secondToDuration(z / y)
-	s.jitter = secondToDuration(math.Sqrt(w/y + math.Pow(s.jitter.Seconds(), 2)))
+	leap = getLeap(leapCount)
+	offset = secondToDuration(z / y)
+	jitter = secondToDuration(math.Sqrt(w/y + math.Pow(s.jitter.Seconds(), 2)))
+	return
 }
 
 func getLeap(cnt [3]uint8) uint8 {

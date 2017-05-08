@@ -30,6 +30,7 @@ type Service struct {
 	dispersion time.Duration
 	jitter     time.Duration
 	referTime  time.Time
+	epoch      time.Time
 	clockReady chan struct{}
 
 	responseTmpl []byte
@@ -38,6 +39,7 @@ type Service struct {
 	stratum      uint8
 	poll         int8
 	precision    int8
+	freqCount    int8
 
 	pollLevelCounter int8
 }
