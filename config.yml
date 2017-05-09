@@ -3,9 +3,9 @@ listen_addr: ":12303"
 worker: 0
 minpoll: 4
 maxpoll: 10
+geodb: GeoLite2-Country.mmdb
+
 stratum_pool:
-  - time.windows.com
-  - time.apple.com
   - wwv.nist.gov
   - time.nist.gov
   - time-b.nist.gov
@@ -13,7 +13,8 @@ stratum_pool:
 
 stats:
     pro_addr: :7370
-    geodb: GeoLite2-Country.mmdb
 
 restrict:
-  - 128.0.0.1/32 10pps
+  - cn 3000/s kod
+  - us 100/s  drop
+  - default 2000/s kod
