@@ -3,6 +3,8 @@ package sntpd
 import (
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"time"
 )
 
@@ -10,11 +12,46 @@ type Service struct {
 	conn     *net.UDPConn
 	clock    *Clock
 	stat     *State
+	cfg      *Config
 	template []byte
 }
 
-func NewService(cfg string) *Servic {
+func NewService(cfgPath string) (s *Service, err error) {
+	cfg, err := newConfig(cfgPath)
+	if err != nil {
+		return
+	}
+}
 
+func (s *Service) ListenAndServe() (err error) {
+	var (
+		addr *net.UDPAddr
+	)
+	addr, err = net.ResolveUDPAddr("udp", s.cfg.Listen)
+	if err != nil {
+		return
+	}
+
+	s.conn, err = net.ListenUDP("udp", addr)
+	if err != nil {
+		return
+	}
+
+	for i := 0; i < s.cfg.Worker; i++ {
+		go s.workerDo(i)
+	}
+	s.waitForSignal()
+}
+
+func (s *Service) waitForSignal() {
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+
+	// Block until a signal is received.
+	<-c
+	s.conn.Close()
+	log.Print("Exit")
 }
 
 func (s *Service) workerDo(i int) {
@@ -29,7 +66,7 @@ func (s *Service) workerDo(i int) {
 
 	defer func(i int) {
 		if r := recover(); r != nil {
-			log.Printf("Worker: %d falted, reason:%s, read:%d", i, r, n)
+			log.Printf("Worker: %d fatal, reason:%s, read:%d", i, r, n)
 		} else {
 			log.Printf("Worker: %d exited, reason:%s, read:%d", i, err, n)
 		}
@@ -47,7 +84,8 @@ func (s *Service) workerDo(i int) {
 			continue
 		}
 
-		switch p[Mode] {
+		// GetMode
+		switch p[LiVnMode] &^ 0xf8 {
 		case ModeReserved:
 			fallthrough
 		case ModeClient:
