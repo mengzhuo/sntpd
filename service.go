@@ -21,6 +21,10 @@ func NewService(cfgPath string) (s *Service, err error) {
 	if err != nil {
 		return
 	}
+	s = &Service{
+		cfg: cfg,
+	}
+	return
 }
 
 func (s *Service) ListenAndServe() (err error) {
@@ -41,6 +45,7 @@ func (s *Service) ListenAndServe() (err error) {
 		go s.workerDo(i)
 	}
 	s.waitForSignal()
+	return
 }
 
 func (s *Service) waitForSignal() {
@@ -94,7 +99,7 @@ func (s *Service) workerDo(i int) {
 				p[TransmitTimeStamp:TransmitTimeStamp+8])
 			SetUint64(p, ReceiveTimeStamp, toNtpTime(receiveTime))
 			SetUint64(p, TransmitTimeStamp, toNtpTime(time.Now()))
-			_, err = s.conn.WriteToUDP(p, raddr)
+			_, err = s.conn.WriteToUDP(p, remoteAddr)
 			if err != nil {
 				log.Printf("worker: %s write failed.", remoteAddr.String())
 			}

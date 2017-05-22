@@ -36,6 +36,14 @@ const (
 	TransmitTimeStamp
 )
 
+const (
+	nanoPerSec = 1e9
+)
+
+var (
+	ntpEpoch = time.Unix(0, 0)
+)
+
 func toNtpTime(t time.Time) uint64 {
 	nsec := uint64(t.Sub(ntpEpoch))
 	sec := nsec / nanoPerSec

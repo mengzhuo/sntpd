@@ -13,6 +13,9 @@ var (
 
 func main() {
 	flag.Parse()
-	service := sntpd.NewService(*cfgPath)
-	log.Print(service.ListenAndServe())
+	service, err := sntpd.NewService(*cfgPath)
+	if err != nil {
+		log.Print(err)
+	}
+	service.ListenAndServe()
 }
