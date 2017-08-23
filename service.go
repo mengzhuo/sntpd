@@ -3,8 +3,7 @@ package sntpd
 import (
 	"log"
 	"net"
-	"os"
-	"os/signal"
+	"sync"
 	"time"
 )
 
@@ -41,31 +40,24 @@ func (s *Service) ListenAndServe() (err error) {
 		return
 	}
 
+	var wg sync.WaitGroup
 	for i := 0; i < s.cfg.Worker; i++ {
-		go s.workerDo(i)
+		go s.workerDo(i, &wg)
 	}
-	s.waitForSignal()
+	wg.Wait()
+	err = s.conn.Close()
+	log.Print("Exit")
 	return
 }
 
-func (s *Service) waitForSignal() {
-
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-
-	// Block until a signal is received.
-	<-c
-	s.conn.Close()
-	log.Print("Exit")
-}
-
-func (s *Service) workerDo(i int) {
+func (s *Service) workerDo(i int, wg *sync.WaitGroup) {
 	var (
 		n           int
 		remoteAddr  *net.UDPAddr
 		err         error
 		receiveTime time.Time
 	)
+	wg.Add(1)
 
 	p := make([]byte, 48)
 
@@ -75,6 +67,7 @@ func (s *Service) workerDo(i int) {
 		} else {
 			log.Printf("Worker: %d exited, reason:%s, read:%d", i, err, n)
 		}
+		wg.Done()
 	}(i)
 
 	for {
