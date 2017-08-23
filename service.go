@@ -78,7 +78,7 @@ func (s *Service) workerDo(i int, wg *sync.WaitGroup) {
 
 		receiveTime = time.Now()
 		if n < 48 {
-			log.Printf("worker: %s send small packet ", remoteAddr.String())
+			log.Printf("worker: %s get small packet %d", remoteAddr.String(), n)
 			continue
 		}
 
@@ -94,11 +94,10 @@ func (s *Service) workerDo(i int, wg *sync.WaitGroup) {
 			SetUint64(p, TransmitTimeStamp, toNtpTime(time.Now()))
 			_, err = s.conn.WriteToUDP(p, remoteAddr)
 			if err != nil {
-				log.Printf("worker: %s write failed.", remoteAddr.String())
+				log.Printf("worker: %s write failed. %s", remoteAddr.String(), err)
 			}
 		default:
 			log.Printf("%s not client request", remoteAddr.String())
-			continue
 		}
 	}
 }

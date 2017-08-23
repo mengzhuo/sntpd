@@ -13,6 +13,7 @@ const (
 	Phi           float64 = 15e-6 // A.K.A frequency torlarence 15e-6 s / s
 	NotSync               = 0x03
 	MaxDispersion         = 16 * time.Second
+	MaxStratum            = 16
 )
 
 const (
@@ -36,9 +37,11 @@ func durationToPoll(t time.Duration) int8 {
 type Status uint8
 
 type Peer struct {
-	addr string
+	addr  string
+	index int
 
-	epoch time.Time
+	epoch    time.Time
+	nextTime time.Time
 
 	offset float64
 	jitter float64
@@ -65,7 +68,7 @@ func (p *Peer) query() {
 		return
 	}
 
-	if resp.Stratum == 0 || resp.Stratum > 15 {
+	if resp.Stratum == 0 || resp.Stratum > MaxStratum {
 		log.Print("InvalidStratum", p.addr)
 		return
 	}
@@ -95,6 +98,18 @@ func (p *Peer) query() {
 	p.delay = resp.RTT.Seconds()
 
 	return
+}
+
+func (s *Service) monitorPeer(p *Peer) {
+	interval := time.Second
+	for {
+		time.Sleep(interval)
+		p.query()
+		interval := pollToDuration(p.ppoll)
+		if p.reach&1 == 0 {
+			// not reached
+		}
+	}
 }
 
 func (p *Peer) String() string {

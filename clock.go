@@ -8,12 +8,8 @@ import (
 )
 
 const (
-	MinStep     = 300 * time.Second
-	MaxChange   = 128 * time.Millisecond
-	AllanXpt    = time.Hour
 	MaxDistance = 1.5 // second
 	NStage      = 8
-	MaxStratum  = 16
 )
 
 const (
@@ -51,32 +47,33 @@ func (b byDistance) Len() int {
 func (s *Service) monitor() {
 	// peer nexttime will be update by Select or Update
 	var (
-		now     time.Time
-		changed bool
+		now       time.Time
+		changed   bool
+		sleepTime time.Duration
 	)
 
 	for {
+		time.Sleep(sleepTime)
+		changed = false
 		now = time.Now()
 		for _, p := range s.clock.peer {
 			if p.nextTime.After(now) {
 				continue
 			}
-			p.nextTime = now.Add(pollToDuration(s.clock.poll))
 			p.query()
+			p.nextTime = now.Add(pollToDuration(s.clock.poll))
 			if p.reach&1 == 0 {
 				continue
 			}
+			// some peer is changed
 			changed = true
 		}
-		time.Sleep(time.Second)
 
 		if !changed {
 			continue
 		}
 
 		s.clockSelect()
-		s.clockUpdate()
-		changed = false
 	}
 }
 
@@ -96,7 +93,7 @@ type Interset struct {
 func (s *Service) clockSelect() {
 
 	samples := []Interset{}
-	for _, p := range s.clock.peer {
+	for _, p = range s.clock.peer {
 		if p.status < PeerFalseTick {
 			continue
 		}
@@ -108,7 +105,15 @@ func (s *Service) clockSelect() {
 		log.Printf("clockSelect: not enough peer to select cluster surviors")
 		return
 	}
-	s.marzullo(samples)
+	surviors := s.marzullo(samples)
+
+	for _, p := range surviors {
+		if p.index == s.clock.index {
+			log.Print("nothing changed")
+			return
+		}
+	}
+
 }
 
 func (s *Service) marzullo(iset []Interset) (surviors []*Peer) {
