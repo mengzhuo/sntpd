@@ -1,9 +1,6 @@
 [submodule "vendor/github.com/beevik/ntp"]
 	path = vendor/github.com/beevik/ntp
 	url = https://github.com/beevik/ntp
-[submodule "vendor/gopkg.in/yaml.v2"]
-	path = vendor/gopkg.in/yaml.v2
-	url = https://gopkg.in/yaml.v2
 [submodule "vendor/github.com/beorn7/perks"]
 	path = vendor/github.com/beorn7/perks
 	url = https://github.com/beorn7/perks
