@@ -60,9 +60,21 @@ type Peer struct {
 	status  Status
 }
 
-func (p *Peer) query() {
+func NewPeer(addr string, index int) (p *Peer) {
+	p = &Peer{addr: addr,
+		index:    index,
+		epoch:    time.Unix(0, 0),
+		nextTime: time.Unix(0, 0),
+		ppoll:    4,
+
+		rootDispersion: MaxDispersion.Seconds(),
+		rootDelay:      MaxDispersion.Seconds(),
+	}
+	return
+}
+
+func (p *Peer) query(resp *ntp.Response, err error) {
 	p.reach <<= 1
-	resp, err := ntp.Query(p.addr, 4)
 	if err != nil {
 		log.Print(err, p.addr)
 		return
@@ -101,10 +113,11 @@ func (p *Peer) query() {
 }
 
 func (s *Service) monitorPeer(p *Peer) {
-	interval := time.Second
+	interval := 0 * time.Second
 	for {
 		time.Sleep(interval)
-		p.query()
+		resp, err := ntp.Query(p.addr, 4)
+		p.query(resp, err)
 		interval := pollToDuration(p.ppoll)
 		if p.reach&1 == 0 {
 			// not reached

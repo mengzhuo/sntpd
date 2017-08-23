@@ -26,22 +26,16 @@ type Clock struct {
 	precision int8
 }
 
+func NewClock(cfg *Config) (clk *Clock) {
+	clk = &Clock{sysIndex: -1}
+	for i, addr := range cfg.ClockList {
+		clk.peer = append(clk.peer, NewPeer(addr, i))
+	}
+	return
+}
+
 func pollToDuration(poll int8) time.Duration {
 	return time.Duration(math.Pow(2, float64(poll)) * float64(time.Second))
-}
-
-type byDistance []filterDistance
-
-func (b byDistance) Swap(i, j int) {
-	b[i], b[j] = b[j], b[i]
-}
-
-func (b byDistance) Less(i, j int) bool {
-	return b[i].distance < b[j].distance
-}
-
-func (b byDistance) Len() int {
-	return len(b)
 }
 
 func (s *Service) monitor() {
